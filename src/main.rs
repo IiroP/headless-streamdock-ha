@@ -1,5 +1,3 @@
-use dotenv::dotenv;
-use hass_rs::client::HassClient;
 use image::open;
 use mirajazz::{
     device::{Device, DeviceQuery, list_devices},
@@ -7,13 +5,13 @@ use mirajazz::{
     state::DeviceStateUpdate,
     types::{ImageFormat, ImageMirroring, ImageMode, ImageRotation},
 };
-use serde_json::json;
-use std::{collections::HashMap, env::var};
+use std::collections::HashMap;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::inputs::process_input;
 
 mod config;
+mod hass;
 mod inputs;
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x6603, 0x1003);
@@ -32,17 +30,7 @@ async fn main() -> Result<(), MirajazzError> {
     // SIGTERM = kill or systemd stop
     let mut sigterm = signal(SignalKind::terminate()).unwrap();
 
-    dotenv().ok();
-    let ha_url: String = var("HA_URL").expect("HA_URL env variable is missing");
-    let ha_token: String = var("HA_TOKEN").expect("HA_TOKEN env variable is missing");
-    let mut hass_client = HassClient::new(&ha_url)
-        .await
-        .expect("Failed to connect to HA");
-
-    hass_client
-        .auth_with_longlivedtoken(&ha_token)
-        .await
-        .expect("Failed to authenticate with HA");
+    let mut hass_client = hass::init_client().await;
 
     let config = config::load_config().expect("Failed to load config");
     let buttons_by_id: HashMap<u8, config::ButtonConfig> =
@@ -117,55 +105,14 @@ async fn main() -> Result<(), MirajazzError> {
                     }
                 }
 
+                // Event handler
                 for update in updates {
-                    //println!("Received input: {:?}", update);
                     match update {
                         DeviceStateUpdate::ButtonDown(i) => {
-                            let btn = buttons_by_id.get(&i);
-                            if let Some(b) = btn {
-                                hass_client
-                                    .call_service(
-                                        b.domain.clone(),
-                                        b.service.clone(),
-                                        Some(json!({"entity_id": b.entity_id.clone()})),
-                                    )
-                                    .await
-                                    .unwrap_or_else(|_| {
-                                        println!("Failed to trigger action for button {i}")
-                                    });
-                            } else {
-                                println!("No config for button {i}")
-                            }
+                            hass::handle_button(&mut hass_client, &buttons_by_id, i).await;
                         }
                         DeviceStateUpdate::EncoderTwist(i, value) => {
-                            let knob = knobs_by_id.get(&i);
-                            if let Some(k) = knob {
-                                if value > 0 {
-                                    hass_client
-                                        .call_service(
-                                        k.domain.clone(),
-                                        k.service.clone(),
-                                    Some(
-                                        json!({"entity_id": k.entity_id.clone(), k.key.clone(): k.step}),
-                                    ),
-                                )
-                                .await
-                                .expect("Unable to increase value");
-                                } else {
-                                    hass_client
-                                        .call_service(
-                                        k.domain.clone(),
-                                        k.service.clone(),
-                                    Some(
-                                        json!({"entity_id": k.entity_id.clone(), k.key.clone(): -k.step}),
-                                    ),
-                                )
-                                .await
-                                .expect("Unable to decrease value");
-                                }
-                            } else {
-                                println!("No config for knob {i}")
-                            }
+                            hass::handle_knob(&mut hass_client, &knobs_by_id, i, value).await;
                         }
                         _ => {}
                     }
@@ -173,6 +120,7 @@ async fn main() -> Result<(), MirajazzError> {
             }
         };
 
+        // Ensure controlled exit
         tokio::select! {
             _ = main_loop => {},
             _ = sigint.recv() => {
