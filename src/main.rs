@@ -47,6 +47,8 @@ async fn main() -> Result<(), MirajazzError> {
     let config = config::load_config().expect("Failed to load config");
     let buttons_by_id: HashMap<u8, config::ButtonConfig> =
         config.buttons.iter().map(|b| (b.id, b.clone())).collect();
+    let knobs_by_id: HashMap<u8, config::KnobConfig> =
+        config.knobs.iter().map(|k| (k.id, k.clone())).collect();
 
     for dev in list_devices(&[QUERY]).await? {
         println!(
@@ -62,7 +64,9 @@ async fn main() -> Result<(), MirajazzError> {
         // Print out some info from the device
         println!("Connected to '{}'", device.serial_number());
 
-        device.set_brightness(50).await?;
+        // Track brightness so we can dim on inactivity and restore on activity.
+        let current_brightness: u8 = config.brightness;
+        device.set_brightness(current_brightness).await?;
         device.clear_all_button_images().await?;
 
         println!("Key count: {}", device.key_count());
@@ -81,11 +85,37 @@ async fn main() -> Result<(), MirajazzError> {
         let reader = device.get_reader(process_input);
 
         let main_loop = async {
+            use tokio::time::{Duration, timeout};
+
+            // We dim after 10 seconds of inactivity.
+            let idle_timeout = Duration::from_secs(config.timeout);
+            let mut is_dimmed = false;
+
             loop {
-                let updates = match reader.read(None).await {
-                    Ok(updates) => updates,
-                    Err(_) => break,
+                // Wait for events up to idle_timeout; on timeout, dim if not already dimmed.
+                let updates = match timeout(idle_timeout, reader.read(None)).await {
+                    Ok(Ok(updates)) => updates,
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        if !is_dimmed {
+                            if let Err(e) = device.sleep().await {
+                                println!("Failed to dim brightness: {e}");
+                            } else {
+                                is_dimmed = true;
+                            }
+                        }
+                        continue;
+                    }
                 };
+
+                // We got some updates: ensure brightness is restored if we were dimmed.
+                if is_dimmed {
+                    if let Err(e) = device.set_brightness(current_brightness).await {
+                        println!("Failed to restore brightness: {e}");
+                    } else {
+                        is_dimmed = false;
+                    }
+                }
 
                 for update in updates {
                     //println!("Received input: {:?}", update);
@@ -107,29 +137,34 @@ async fn main() -> Result<(), MirajazzError> {
                                 println!("No config for button {i}")
                             }
                         }
-                        DeviceStateUpdate::EncoderTwist(value, value2) => {
-                            if value2 > 0 {
-                                hass_client
-                                .call_service(
-                                    "homeassistant".to_string(),
-                                    "turn_on".to_string(),
+                        DeviceStateUpdate::EncoderTwist(i, value) => {
+                            let knob = knobs_by_id.get(&i);
+                            if let Some(k) = knob {
+                                if value > 0 {
+                                    hass_client
+                                        .call_service(
+                                        k.domain.clone(),
+                                        k.service.clone(),
                                     Some(
-                                        json!({"entity_id": "light.valot", "brightness_step": 10}),
+                                        json!({"entity_id": k.entity_id.clone(), k.key.clone(): k.step}),
                                     ),
                                 )
                                 .await
-                                .expect("Unable to increase brightness");
+                                .expect("Unable to increase value");
+                                } else {
+                                    hass_client
+                                        .call_service(
+                                        k.domain.clone(),
+                                        k.service.clone(),
+                                    Some(
+                                        json!({"entity_id": k.entity_id.clone(), k.key.clone(): -k.step}),
+                                    ),
+                                )
+                                .await
+                                .expect("Unable to decrease value");
+                                }
                             } else {
-                                hass_client
-                                .call_service(
-                                    "homeassistant".to_string(),
-                                    "turn_on".to_string(),
-                                    Some(
-                                        json!({"entity_id": "light.valot", "brightness_step": -10}),
-                                    ),
-                                )
-                                .await
-                                .expect("Unable to decrease brightness");
+                                println!("No config for knob {i}")
                             }
                         }
                         _ => {}

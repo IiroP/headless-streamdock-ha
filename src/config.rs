@@ -2,7 +2,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub brightness: u8,
+    pub timeout: u64,
     pub buttons: Vec<ButtonConfig>,
+    pub knobs: Vec<KnobConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -12,6 +15,16 @@ pub struct ButtonConfig {
     pub service: String,
     pub entity_id: String,
     pub icon: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct KnobConfig {
+    pub id: u8,
+    pub domain: String,
+    pub service: String,
+    pub entity_id: String,
+    pub key: String,
+    pub step: i64,
 }
 
 pub fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
