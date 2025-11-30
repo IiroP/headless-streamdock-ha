@@ -599,7 +599,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "headless-streamdock"
+name = "headless-streamdock-ha"
 version = "0.1.0"
 dependencies = [
  "dotenv",

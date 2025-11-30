@@ -60,7 +60,7 @@ async fn main() -> Result<(), MirajazzError> {
         println!("Key count: {}", device.key_count());
         // Write it to the device
         for b in &config.buttons {
-            let image = open(format!("examples/{}", b.icon))
+            let image = open(format!("images/{}", b.icon))
                 .expect(format!("Failed to open image {}", b.icon).as_str());
             device
                 .set_button_image(b.id, IMAGE_FORMAT, image.clone())

@@ -3,4 +3,7 @@
 # Config
 .env
 config.toml
+
+# Images
 examples/
+images/
