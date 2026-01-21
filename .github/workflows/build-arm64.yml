@@ -1,0 +1,38 @@
+name: Build ARM64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build for ARM64
+        run: cargo build --release
+
+      - name: Rename binary
+        run: cp target/release/headless-streamdock-ha target/release/headless-streamdock-ha-arm64
+
+      - name: Create/Update Latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: Automated build of the latest ARM64 binary
+          files: target/release/headless-streamdock-ha-arm64
+          prerelease: false
